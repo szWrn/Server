@@ -1,0 +1,7 @@
+dashscope
+pyaudio
+numpy
+scipy
+matplotlib
+librosa
+flask
