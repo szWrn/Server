@@ -1,6 +1,7 @@
-import socket
 from SpeechRecongnition import *
+from Server import *
 import threading
+import time
 
 HOST = "0.0.0.0"
 PORT = 5001
@@ -8,36 +9,32 @@ clients = set()
 
 
 class HandleCallback(Callback):
-    def __init__(self):
+    def __init__(self, server):
         super().__init__()
+        self.server = server
 
     def on_event(self, result):
+        print(self.server.clients)
         sentence = result.get_sentence()
         print(sentence["text"])
-        for client in list(clients):
+        for client in list(self.server.clients):
             try:
-                client.sendall(sentence["text"])
+                client.sendall(bytes(sentence["text"][-20:] + "\n", "utf-8"))
+                # client.sendall(b"Group2\n")
             except:
                 clients.remove(client)
 
 
-class Server:
+class VoiceRecongnition(SpeechRecognition):
     def __init__(self):
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server.bind((HOST, PORT))
-        self.server.listen(5)
+        self.server = Server(HOST, PORT)
 
-        self.speechrecognition = SpeechRecognition(HandleCallback())
-
-    def run(self):
-        threading.Thread(target=self.speechrecognition.start, daemon=True)
-
-        while True:
-            client_socket, addr = self.server.accept()
-            clients.add(client_socket)
+        callback = HandleCallback(self.server)
+        t = threading.Thread(target=self.server.run, daemon=True)
+        t.start()
+        super().__init__(callback)
 
 
 if __name__ == "__main__":
-    server = Server()
-    server.run()
+    vr = VoiceRecongnition()
+    vr.start()
