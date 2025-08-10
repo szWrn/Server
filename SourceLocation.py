@@ -30,9 +30,9 @@ class MicrophoneArray:
         self.open_stream()
 
     def open_stream(self):
-        device_index = self.find_usb_device()
-        if device_index is None:
-            raise ValueError("未检测到4通道USB麦克风设备")
+        # device_index = self.find_usb_device()
+        # if device_index is None:
+        #     raise ValueError("未检测到4通道USB麦克风设备")
 
         self.stream = self.audio.open(
             input_device_index=device_index,
