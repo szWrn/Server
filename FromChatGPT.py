@@ -13,16 +13,16 @@ num_mics = 4  # 麦克风数
 num_channels = 2  # 通道数
 sample_rate = 48000
 chunk_size = 1024  # 每次处理的样本数
-mic_space = 0.04
-sound_speed = 343
+mic_space = 0.04  # 麦克风间距
+sound_speed = 343  # 声速
 max_angle = 180  # 最大拾音角度前向180度
 
 # 麦克风位置（线型等距阵列，沿X轴排列）
 mic_positions = np.array([
     [-1.5 * mic_space, 0],  # 左1
     [-0.5 * mic_space, 0],  # 左2
-    [0.5 * mic_space, 0],  # 右1
-    [1.5 * mic_space, 0]  # 右2
+    [0.5 * mic_space, 0],   # 右1
+    [1.5 * mic_space, 0]    # 右2
 ])
 
 # 设备相关配置
@@ -42,7 +42,7 @@ class Callback:
         print("麦克风已打开")
         mic = pyaudio.PyAudio()
         stream = mic.open(format=pyaudio.paInt16,
-                          channels=num_channels,  # 修改为 2 通道
+                          channels=num_channels,
                           rate=sample_rate,
                           input=True,
                           frames_per_buffer=chunk_size)
@@ -67,8 +67,11 @@ class Callback:
         # 估算方向
         angle = self.localizer.estimate_direction(delays)
 
+        # 计算音量
+        volume = self.processor.compute_volume(normalized_signals)
+
         # 将结果放入队列供显示线程使用
-        display_queue.put(angle)
+        display_queue.put((angle, volume))
 
 
 # 音频数据处理类
@@ -92,6 +95,10 @@ class AudioProcessor:
     def normalize_signal(self, signal):
         return signal / np.max(np.abs(signal))
 
+    def compute_volume(self, signal):
+        # 使用RMS（均方根）计算音量
+        return np.sqrt(np.mean(signal**2))
+
 
 # 基于TDOA的方向定位类
 class TDOALocalizer:
@@ -103,7 +110,7 @@ class TDOALocalizer:
         ref_signal = signals[self.ref_index]
         delays = np.zeros(num_mics)
 
-        for i in range(num_mics):
+        for i in range(num_channels):
             if i == self.ref_index:
                 delays[i] = 0.0
                 continue
@@ -120,7 +127,7 @@ class TDOALocalizer:
     def estimate_direction(self, delays):
         A = []
         b = []
-        for i in range(num_mics):
+        for i in range(num_channels):
             if i == self.ref_index:
                 continue
             delta_x = self.mic_positions[i, 0] - self.mic_positions[self.ref_index, 0]
@@ -130,8 +137,9 @@ class TDOALocalizer:
         A = np.array(A)
         b = np.array(b)
 
+        # 最小二乘解，估算声源方向
         sin_theta = np.linalg.lstsq(A, b, rcond=None)[0][0]
-        sin_theta = np.clip(sin_theta, -1, 1)
+        sin_theta = np.clip(sin_theta, -1, 1)  # 确保sin_theta在[-1, 1]之间
         angle_rad = np.arcsin(sin_theta)
         angle_deg = np.degrees(angle_rad)
 
@@ -149,12 +157,12 @@ class MicrophoneArray:
     def open_stream(self):
         device_index = self.find_usb_device()
         if device_index is None:
-            raise ValueError("未检测到2通道USB麦克风设备")  # 现在只需要2个通道
+            raise ValueError("未检测到2通道USB麦克风设备")
 
         self.stream = self.audio.open(
             input_device_index=device_index,
             format=pyaudio.paInt16,
-            channels=num_channels,  # 2 通道
+            channels=num_channels,
             rate=sample_rate,
             input=True,
             frames_per_buffer=chunk_size
@@ -164,9 +172,7 @@ class MicrophoneArray:
         found_device = None
         for i in range(self.audio.get_device_count()):
             dev_info = self.audio.get_device_info_by_index(i)
-            print(f"设备 {i} 名称: {dev_info['name']}, 最大输入通道数: {dev_info['maxInputChannels']}")
-            if "USB" in dev_info["name"] and dev_info["maxInputChannels"] >= num_channels:  # 查找支持2个通道的设备
-                print(f"找到符合条件的设备: {dev_info['name']}, 索引: {i}")
+            if "USB" in dev_info["name"] and dev_info["maxInputChannels"] >= num_channels:
                 found_device = i
                 break
         return found_device
@@ -174,8 +180,8 @@ class MicrophoneArray:
     def read_chunk(self):
         raw_data = self.stream.read(chunk_size, exception_on_overflow=False)
         data = np.frombuffer(raw_data, dtype=np.int16)
-        data = data.reshape(-1, num_channels).T  # 修改为2通道处理
-        self.callback.on_audio_frame(data.astype(np.float32) / 32768.0)  # 归一化到[-1, 1]
+        data = data.reshape(-1, num_channels).T
+        self.callback.on_audio_frame(data.astype(np.float32) / 32768.0)
 
     def close(self):
         self.stream.stop_stream()
@@ -195,7 +201,6 @@ class RealTimeDirectionTracker:
         plt.ion()
 
     def start(self):
-        # 启动数据采集线程
         self.thread = Thread(target=self.run)
         self.thread.daemon = True
         self.thread.start()
@@ -213,15 +218,18 @@ class RealTimeDirectionTracker:
     def update_display(self):
         while not self.stop_event.is_set():
             if not display_queue.empty():
-                angle = display_queue.get()
-                self.update_plot(angle)
+                angle, volume = display_queue.get()
+                self.update_plot(angle, volume)
             plt.pause(0.05)
 
-    def update_plot(self, angle_deg):
+    def update_plot(self, angle_deg, volume):
         self.ax.clear()
         angle_rad = np.deg2rad(angle_deg)
 
-        self.ax.arrow(angle_rad, 0, 0, 1, width=0.05, color='red')
+        # 使用音量调整箭头的长度
+        arrow_length = min(volume * 10, 1)  # 限制箭头最大长度为1
+
+        self.ax.arrow(angle_rad, 0, 0, arrow_length, width=0.05, color='red')
 
         self.ax.set_thetamin(-90)
         self.ax.set_thetamax(90)

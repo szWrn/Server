@@ -1,11 +1,13 @@
 from SpeechRecongnition import *
 from Server import *
+# from DegreeOfUnderstanding import *
 import threading
 import time
 
 HOST = "0.0.0.0"
 PORT = 5001
 clients = set()
+message = []
 
 
 class HandleCallback(Callback):
@@ -16,6 +18,9 @@ class HandleCallback(Callback):
     def on_event(self, result):
         print(self.server.clients)
         sentence = result.get_sentence()
+        # if (RecognitionResult.is_sentence_end(sentence)):
+        #     message.append(sentence["text"])
+        # check(message)
         print(sentence["text"])
         for client in list(self.server.clients):
             try:
